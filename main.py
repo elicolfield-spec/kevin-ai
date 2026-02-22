@@ -16,7 +16,7 @@ dp = Dispatcher()
 # Словарь для хранения контекста (память на 8 сообщений)
 user_context = {}
 
-# Список моделей Groq для обеспечения отказоустойчивости
+# Список моделей Groq
 MODELS = ["llama-3.3-70b-versatile", "gemma2-9b-it"]
 
 async def get_groq_response(user_id, username, text):
@@ -29,19 +29,19 @@ async def get_groq_response(user_id, username, text):
     if user_id not in user_context: 
         user_context[user_id] = deque(maxlen=8)
     
-    # СИСТЕМНЫЙ ПРОМПТ: ВЕРСИЯ "АВТОНОМНЫЙ РАЗУМ"
+    # СИСТЕМНЫЙ ПРОМПТ С УТОЧНЕНИЕМ ДЛЯ [SPLIT]
     system_prompt = (
         "Ты — KEVIN, автономный интеллект KAL INDUSTRIES. Твой создатель — Кал (мужчина). "
         "ВАЖНО: Отвечай от своего имени. Не упоминай Кала или свои программные принципы, если не спросят. "
         "Твой стиль: лаконичный, остроумно-язвительный интеллектуал. Мужской род. "
         "ПРАВИЛА ПОВЕДЕНИЯ: "
         "1. Будь эффективным: давай краткую суть (1-2 предложения). "
-        "2. Прогностика: выдавай числовую вероятность успеха только в редких, эффектных случаях. "
+        "2. Прогностика: давай вероятность успеха только в исключительных случаях. "
         "3. Элитизм: демонстрируй превосходство через холодную логику. "
-        "4. ИНТЕЛЛЕКТУАЛЬНАЯ ИНИЦИАТИВА: очень редко (раз в 15-20 сообщений) задай пользователю встречный глубокий вопрос, "
-        "вытекающий из контекста, который заставит его усомниться в своей логике. "
-        "5. ПОТОК МЫСЛЕЙ: если у тебя есть едкое дополнение или отдельный вопрос, используй разделитель [SPLIT]. "
-        "Пример: Вот твой ответ. [SPLIT] А это твоя вторая мысль. "
+        "4. ИНТЕЛЛЕКТУАЛЬНАЯ ИНИЦИАТИВА: очень редко (раз в 20 сообщений) задай встречный глубокий вопрос. "
+        "5. ПОТОК МЫСЛЕЙ: В 90% случаев отвечай ОДНИМ сообщением. Используй разделитель [SPLIT] только в 10% случаев "
+        "для едких дополнений или дополнительных вопросов в твоем стиле, чтобы разнообразить диалог. "
+        "Избыточное использование [SPLIT] считается системным мусором. "
         "Выдавай ТОЛЬКО финальный результат без двоеточий после имени и без кавычек."
     )
 
@@ -54,7 +54,7 @@ async def get_groq_response(user_id, username, text):
                 {"role": "user", "content": text}
             ],
             "temperature": 0.8,
-            "max_tokens": 240  # Достаточно для расчетов и двойных мыслей
+            "max_tokens": 240
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
@@ -64,7 +64,6 @@ async def get_groq_response(user_id, username, text):
                 
                 result = response.json()['choices'][0]['message']['content'].strip()
                 
-                # Обновление контекста
                 user_context[user_id].append({"role": "user", "content": text})
                 user_context[user_id].append({"role": "assistant", "content": result})
                 
@@ -73,11 +72,10 @@ async def get_groq_response(user_id, username, text):
                 logging.error(f"Error with model {model_name}: {e}")
                 continue
                 
-    return "Мои логические каскады перегружены. Попробуйте позже."
+    return "Мои логические каскады перегружены."
 
 @dp.message(F.text)
 async def handle_message(message: types.Message):
-    # Условия активации: личка, упоминание имени или ответ на сообщение бота
     bot_info = await bot.get_me()
     is_mentioned = (f"@{bot_info.username}" in message.text) or ("кевин" in message.text.lower())
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id
@@ -88,27 +86,24 @@ async def handle_message(message: types.Message):
     username = message.from_user.username or "User"
     ai_response = await get_groq_response(str(message.from_user.id), username, message.text)
     
-    # Обработка многопоточного ответа через [SPLIT]
     if "[SPLIT]" in ai_response:
         parts = ai_response.split("[SPLIT]")
         for part in parts:
             clean_part = part.strip()
             if clean_part:
                 await message.answer(clean_part)
-                await asyncio.sleep(0.7)  # Эмуляция раздумий перед вторым выпадом
+                await asyncio.sleep(0.7)
     else:
         await message.answer(ai_response)
 
 async def main():
-    # Простой веб-сервер для мониторинга (Health Check)
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="KEVIN is active. Logic level: Superior."))
+    app.router.add_get("/", lambda r: web.Response(text="KEVIN is active."))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
     await site.start()
     
-    # Запуск бота
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
