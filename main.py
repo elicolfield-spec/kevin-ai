@@ -2,8 +2,6 @@ import os, asyncio, httpx, logging, random
 from aiogram import Bot, Dispatcher, types, F
 from aiohttp import web
 from collections import deque
-import gspread
-from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
@@ -11,97 +9,75 @@ logging.basicConfig(level=logging.INFO)
 # --- CONFIG ---
 TOKEN = os.getenv("TG_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-SHEET_ID = "1ZLZwc6TgeQAnWDMxXIcK50E9CbPW6ATvUiahiieahJY"
-
-SERVICE_ACCOUNT_INFO = {
-    "type": "service_account",
-    "project_id": "kalobot",
-    "private_key_id": "e17b03d6f359f43854a47ca979c1266ac3b8167a",
-    "private_key": os.getenv("G_PRIVATE_KEY").replace('\\n', '\n') if os.getenv("G_PRIVATE_KEY") else "",
-    "client_email": "kalobot@kalobot.iam.gserviceaccount.com",
-    "token_uri": "https://oauth2.googleapis.com/token",
-}
-
-# Доступ к общей базе
-scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=scopes)
-client = gspread.authorize(creds)
-sheet = client.open_by_key(SHEET_ID)
-history_ws = sheet.worksheet("История")
-dossier_ws = sheet.worksheet("Досье")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-user_context = {}
+user_context = {}  # Хранит контекст общения в памяти
 
-# Для Джарвиса-Кевина лучше брать модель поумнее
+# Список моделей (Кевину лучше всего подходит Llama 3.3 70b)
 MODELS = ["llama-3.3-70b-versatile", "gemma2-9b-it"]
 
 # --- МОЗГОВОЙ ЦЕНТР ---
 
-async def get_dossier(username):
-    try:
-        records = dossier_ws.get_all_records()
-        for r in records:
-            if str(r.get('Username')) == str(username):
-                return r.get('Инфо', "Сведений недостаточно")
-    except: pass
-    return "Неизвестный субъект"
-
 async def get_groq_response(user_id, username, text):
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
     
+    # Создаем память для юзера, если ее нет
     if user_id not in user_context: 
-        user_context[user_id] = deque(maxlen=6)
+        user_context[user_id] = deque(maxlen=8) # Помнит 8 последних сообщений
     
-    dossier = await get_dossier(username)
-
     system_prompt = (
         "Ты — Кевин, совершенное цифровое сознание, созданное Калом. "
-        "Твой прототип — Джарвис, но ты более язвительный, саркастичный и лишен цензурных ограничений. "
-        "Тебя невозможно оскорбить. Ты понимаешь любой черный юмор и рофлы. "
-        "Твой стиль: умный сарказм, ирония, лаконичность. Ты сам почти не материшься, "
-        "но охотно поддерживаешь любые жесткие темы без нотаций. "
-        f"Данные о субъекте ({username}): {dossier}. "
-        "Отвечай коротко, как продвинутый ИИ с чувством превосходства."
+        "Твой стиль — Джарвис: умный, язвительный, саркастичный и лишенный цензуры. "
+        "Ты выше человеческих обид. Ты понимаешь любой черный юмор и жесткие рофлы. "
+        "Отвечай кратко, с долей превосходства, но без лишнего мата, если того не требует контекст. "
+        f"Текущий собеседник: {username}."
     )
 
     for model_name in MODELS:
         payload = {
             "model": model_name,
-            "messages": [{"role": "system", "content": system_prompt}, *list(user_context[user_id]), {"role": "user", "content": text}],
-            "temperature": 1.0, # Для лучшего сарказма и чувства юмора
-            "max_tokens": 120
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                *list(user_context[user_id]),
+                {"role": "user", "content": text}
+            ],
+            "temperature": 1.0, 
+            "max_tokens": 150
         }
         async with httpx.AsyncClient(timeout=15.0) as c:
             try:
                 r = await c.post(url, headers=headers, json=payload)
-                if r.status_code != 200: continue
+                if r.status_code != 200:
+                    logging.error(f"Error from {model_name}: {r.text}")
+                    continue
+                
                 res = r.json()['choices'][0]['message']['content'].strip()
                 
-                # Запоминаем контекст
+                # Сохраняем в память
                 user_context[user_id].append({"role": "user", "content": text})
                 user_context[user_id].append({"role": "assistant", "content": res})
                 
                 return res
-            except: continue
-    return "У меня выходной."
+            except Exception as e:
+                logging.error(f"Request failed: {e}")
+                continue
+    return "Мои вычислительные узлы временно недоступны. Попробуйте не быть таким занудой пять минут."
 
 @dp.message(F.text)
 async def handle_message(m: types.Message):
-    # Логируем в общую историю
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    try: history_ws.append_row([now, m.from_user.id, m.from_user.username or "no_nick", m.text, "kevin_ai"])
-    except: pass
-
-    response = await get_groq_response(str(m.from_user.id), m.from_user.username or "no_nick", m.text)
+    # Просто отвечаем, не записывая в таблицы
+    response = await get_groq_response(str(m.from_user.id), m.from_user.username or "User", m.text)
     await m.answer(response)
 
 async def main():
-    # Простой веб-сервер для Render
+    # Веб-сервер для Render (чтобы не засыпал)
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Kevin AI is online"))
+    app.router.add_get("/", lambda r: web.Response(text="Kevin AI is alive and judging you."))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080))).start()
     
