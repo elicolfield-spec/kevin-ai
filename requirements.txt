@@ -1,5 +1,6 @@
 aiogram
 httpx
+aiohttp
+google-generativeai
 gspread
 google-auth
-aiohttp
