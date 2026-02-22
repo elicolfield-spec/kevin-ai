@@ -86,7 +86,7 @@ async def get_groq_response(user_id, username, text):
                 
                 return res
             except: continue
-    return "Мои системы временно перегружены вашей гениальностью. Повторите попытку позже."
+    return "У меня выходной."
 
 @dp.message(F.text)
 async def handle_message(m: types.Message):
