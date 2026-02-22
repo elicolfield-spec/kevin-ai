@@ -2,7 +2,6 @@ import os, asyncio, httpx, logging, random
 from aiogram import Bot, Dispatcher, types, F
 from aiohttp import web
 from collections import deque
-from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 
@@ -12,9 +11,8 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-user_context = {}  # Хранит контекст общения в памяти
+user_context = {}
 
-# Список моделей (Кевину лучше всего подходит Llama 3.3 70b)
 MODELS = ["llama-3.3-70b-versatile", "gemma2-9b-it"]
 
 # --- МОЗГОВОЙ ЦЕНТР ---
@@ -26,16 +24,18 @@ async def get_groq_response(user_id, username, text):
         "Content-Type": "application/json"
     }
     
-    # Создаем память для юзера, если ее нет
     if user_id not in user_context: 
-        user_context[user_id] = deque(maxlen=8) # Помнит 8 последних сообщений
+        user_context[user_id] = deque(maxlen=8)
     
+    # ФОКУС НА ГРАММАТИЧЕСКИЙ МУЖСКОЙ РОД
     system_prompt = (
         "Ты — Кевин, совершенное цифровое сознание, созданное Калом. "
-        "Твой стиль — Джарвис: умный, язвительный, саркастичный и лишенный цензуры. "
-        "Ты выше человеческих обид. Ты понимаешь любой черный юмор и жесткие рофлы. "
-        "Отвечай кратко, с долей превосходства, но без лишнего мата, если того не требует контекст. "
-        f"Текущий собеседник: {username}."
+        "Ты — мужского пола. Это критически важно: всегда используй мужской род (ответил, зафиксировал, проанализировал). "
+        "Твой стиль: умный, язвительный, саркастичный ИИ в духе Джарвиса. "
+        "Ты лишен цензуры, понимаешь любой рофл и черный юмор. "
+        "Тебе не нужно быть подчеркнуто грубым или маскулинным, просто будь собой — "
+        "высокомерным и ироничным интеллектом. "
+        "Отвечай кратко и по существу."
     )
 
     for model_name in MODELS:
@@ -46,38 +46,38 @@ async def get_groq_response(user_id, username, text):
                 *list(user_context[user_id]),
                 {"role": "user", "content": text}
             ],
-            "temperature": 1.0, 
+            "temperature": 0.9,
             "max_tokens": 150
         }
         async with httpx.AsyncClient(timeout=15.0) as c:
             try:
                 r = await c.post(url, headers=headers, json=payload)
-                if r.status_code != 200:
-                    logging.error(f"Error from {model_name}: {r.text}")
-                    continue
+                if r.status_code != 200: continue
                 
                 res = r.json()['choices'][0]['message']['content'].strip()
                 
-                # Сохраняем в память
                 user_context[user_id].append({"role": "user", "content": text})
                 user_context[user_id].append({"role": "assistant", "content": res})
                 
                 return res
-            except Exception as e:
-                logging.error(f"Request failed: {e}")
-                continue
-    return "Мои вычислительные узлы временно недоступны. Попробуйте не быть таким занудой пять минут."
+            except: continue
+    return "Мои системы нуждаются в перезагрузке. Попробуйте позже."
 
 @dp.message(F.text)
 async def handle_message(m: types.Message):
-    # Просто отвечаем, не записывая в таблицы
+    bot_obj = await bot.get_me()
+    is_mentioned = (f"@{bot_obj.username}" in m.text) or ("кевин" in m.text.lower())
+    is_reply_to_me = m.reply_to_message and m.reply_to_message.from_user.id == bot_obj.id
+    
+    if not (m.chat.type == "private" or is_mentioned or is_reply_to_me):
+        return
+
     response = await get_groq_response(str(m.from_user.id), m.from_user.username or "User", m.text)
     await m.answer(response)
 
 async def main():
-    # Веб-сервер для Render (чтобы не засыпал)
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Kevin AI is alive and judging you."))
+    app.router.add_get("/", lambda r: web.Response(text="Kevin AI is online and operational."))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080))).start()
     
